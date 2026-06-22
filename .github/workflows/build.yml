@@ -23,8 +23,11 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.4'
-          # Generate wrapper so ./gradlew exists
-          generate-gradle-wrapper: true
+          # We no longer rely on generate-gradle-wrapper
+
+      - name: Generate Gradle Wrapper
+        run: gradle wrapper --gradle-version 8.4
+        # This creates gradlew, gradlew.bat, and the gradle/wrapper/ folder
 
       - name: Build Release APK
         run: ./gradlew assembleRelease
