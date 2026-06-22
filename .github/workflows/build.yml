@@ -1,4 +1,3 @@
-# .github/workflows/build.yml
 name: Build APK
 
 on:
@@ -24,6 +23,8 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.4'
+          # Generate wrapper so ./gradlew exists
+          generate-gradle-wrapper: true
 
       - name: Build Release APK
         run: ./gradlew assembleRelease
