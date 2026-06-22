@@ -1,4 +1,3 @@
-
 // com/lat/os/engine/DecisionRouter.kt
 package com.lat.os.engine
 
@@ -19,14 +18,12 @@ object DecisionRouter {
     }
 
     fun route(context: Context, command: String) {
-        // Log to history
         SystemDatabase(context).logCommand(command, "processing...")
 
         val localAction = SemanticParser.parse(command)
         if (localAction != null) {
             executeLocal(context, localAction)
         } else {
-            // Complex -> Gemini
             scope.launch {
                 val screenData = ScreenScraper.scrapeScreen()
                 val result = GeminiClient.askGemini(context, command, screenData)
@@ -79,26 +76,29 @@ object DecisionRouter {
     }
 
     private fun executeGeminiResult(context: Context, result: GeminiResponse) {
+        val target = result.target_text ?: ""
+        val payload = result.payload ?: ""
+        val spoken = result.spoken_response ?: ""
+
         when (result.action) {
             "TAP" -> {
-                val success = DeviceAutomator.tapOnText(result.target_text ?: "")
-                speak(if (success) result.spoken_response else "Couldn't tap ${result.target_text}")
+                val success = DeviceAutomator.tapOnText(target)
+                speak(if (success) spoken else "Couldn't tap $target")
             }
             "TYPE" -> {
-                DeviceAutomator.typeText(result.payload ?: "")
-                speak(result.spoken_response)
+                DeviceAutomator.typeText(payload)
+                speak(spoken)
             }
             "SCROLL" -> {
-                // Assume scroll direction from payload
                 DeviceAutomator.scrollDown()
-                speak(result.spoken_response)
+                speak(spoken)
             }
             "ANSWER" -> {
-                speak(result.spoken_response)
+                speak(spoken)
             }
-            else -> speak(result.spoken_response)
+            else -> speak(spoken)
         }
-        SystemDatabase(context).logCommand(result.toString(), result.spoken_response)
+        SystemDatabase(context).logCommand(result.toString(), spoken)
     }
 
     private fun speak(text: String) {
