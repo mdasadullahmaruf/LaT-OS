@@ -1,0 +1,10 @@
+# .gitignore
+*.db
+*.db-journal
+build/
+.gradle/
+local.properties
+*.apk
+*.aab
+*.iml
+.idea/
