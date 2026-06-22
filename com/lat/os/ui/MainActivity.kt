@@ -14,6 +14,7 @@ import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.lat.os.core.WakeWordService
+import com.lat.os.engine.DecisionRouter      // <-- added import
 
 class MainActivity : AppCompatActivity() {
 
@@ -24,6 +25,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("latos_prefs", Context.MODE_PRIVATE)
+        DecisionRouter.init(this)      // <-- ADDED THIS LINE
         buildUI()
         updateUI()
     }
