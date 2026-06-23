@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
+import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -43,7 +44,6 @@ class SettingsActivity : AppCompatActivity() {
             setBackgroundColor(0xFF121212.toInt())
         }
 
-        // Title
         root.addView(TextView(this).apply {
             text = "Permissions & Settings"
             textSize = 22f
@@ -122,10 +122,10 @@ class SettingsActivity : AppCompatActivity() {
                 .putString("gemini_api_key", key)
                 .apply()
             if (key.isNotBlank()) {
-                Toast.makeText(this, "✅ Gemini API Key saved!", 
+                Toast.makeText(this, "✅ Gemini API Key saved!",
                     Toast.LENGTH_SHORT).show()
             } else {
-                Toast.makeText(this, "⚠ Key is empty", 
+                Toast.makeText(this, "⚠ Key is empty",
                     Toast.LENGTH_SHORT).show()
             }
         })
@@ -136,7 +136,7 @@ class SettingsActivity : AppCompatActivity() {
         root.addView(makeSectionLabel("📱 App Scanner"))
 
         root.addView(TextView(this).apply {
-            text = "Scans ALL installed apps including YouTube, WhatsApp etc. Use this to diagnose why an app is not being found."
+            text = "Scans ALL installed apps including YouTube, WhatsApp etc."
             setTextColor(0xFFB0B0B0.toInt())
             textSize = 12f
             setPadding(0, 0, 0, 12)
@@ -202,13 +202,14 @@ class SettingsActivity : AppCompatActivity() {
                     "Running: $cmd", Toast.LENGTH_SHORT).show()
             } else {
                 Toast.makeText(this,
-                    "Please type a command first", Toast.LENGTH_SHORT).show()
+                    "Please type a command first",
+                    Toast.LENGTH_SHORT).show()
             }
         })
 
         root.addView(makeDivider())
 
-        // ── APP OPENER TESTER ────────────────────────────────────
+        // ── APP FINDER TESTER ────────────────────────────────────
         root.addView(makeSectionLabel("🔎 Test App Finder"))
 
         root.addView(TextView(this).apply {
@@ -246,7 +247,7 @@ class SettingsActivity : AppCompatActivity() {
                     appTestResult.text = "✅ Found: $pkg"
                 } else {
                     appTestResult.setTextColor(0xFFFF5252.toInt())
-                    appTestResult.text = "❌ Not found: '$query' is not installed"
+                    appTestResult.text = "❌ Not found: '$query' not installed"
                 }
             }
         })
@@ -261,27 +262,25 @@ class SettingsActivity : AppCompatActivity() {
         val pm = packageManager
         val results = mutableListOf<Pair<String, String>>()
 
-        // Scan all installed packages
         try {
-            pm.getInstalledPackages(0).forEach { pkgInfo ->
-                try {
-                    val label = pm.getApplicationLabel(
-                        pkgInfo.applicationInfo).toString()
-                    val pkg = pkgInfo.packageName
-                    // Only include if launchable
-                    if (pm.getLaunchIntentForPackage(pkg) != null) {
-                        results.add(Pair(label, pkg))
-                    }
-                } catch (e: Exception) { }
-            }
+            pm.getInstalledApplications(PackageManager.GET_META_DATA)
+                .forEach { appInfo ->
+                    try {
+                        val pkg = appInfo.packageName
+                        if (pm.getLaunchIntentForPackage(pkg) != null) {
+                            val label = pm.getApplicationLabel(appInfo)
+                                .toString()
+                            results.add(Pair(label, pkg))
+                        }
+                    } catch (e: Exception) { }
+                }
         } catch (e: Exception) { }
 
-        // Also scan launcher apps
         try {
-            val launcherIntent = Intent(Intent.ACTION_MAIN).apply {
+            val intent = Intent(Intent.ACTION_MAIN).apply {
                 addCategory(Intent.CATEGORY_LAUNCHER)
             }
-            pm.queryIntentActivities(launcherIntent, 0).forEach { info ->
+            pm.queryIntentActivities(intent, 0).forEach { info ->
                 val label = info.loadLabel(pm).toString()
                 val pkg = info.activityInfo.packageName
                 if (results.none { it.second == pkg }) {
@@ -300,7 +299,7 @@ class SettingsActivity : AppCompatActivity() {
         appListText.text = sb.toString()
 
         Toast.makeText(this,
-            "✅ Found ${sorted.size} apps! Copy and share.",
+            "✅ Found ${sorted.size} apps!",
             Toast.LENGTH_LONG).show()
     }
 
@@ -379,7 +378,7 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun makeDivider(): View {
-        return TextView(this).apply {
+        return View(this).apply {
             setBackgroundColor(0xFF2A2A2A.toInt())
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 1
