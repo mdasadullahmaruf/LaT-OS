@@ -9,7 +9,9 @@ import android.media.ToneGenerator
 import android.os.Binder
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -23,14 +25,18 @@ class WakeWordService : Service() {
     companion object {
         const val CHANNEL_ID = "wake_word_channel"
         const val NOTIFICATION_ID = 1
+
+        // Static callback so FloatingOverlay can reset state
+        // without circular import
+        var onCommandFinished: (() -> Unit)? = null
     }
 
     private var speechRecognizer: SpeechRecognizer? = null
     private var toneGen: ToneGenerator? = null
     private var tts: TextToSpeech? = null
     private var ttsReady = false
-    private var overlayBinder: FloatingOverlay.OverlayBinder? = null
     private var isListeningForCommand = false
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     inner class LocalBinder : Binder() {
         fun getService(): WakeWordService = this@WakeWordService
@@ -42,7 +48,7 @@ class WakeWordService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification("Ready"))
+        startForeground(NOTIFICATION_ID, buildNotification("Ready — tap ✦ to speak"))
         toneGen = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
         tts = TextToSpeech(this) { status ->
             if (status == TextToSpeech.SUCCESS) {
@@ -60,31 +66,156 @@ class WakeWordService : Service() {
 
     private fun initSpeechRecognizer() {
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            updateNotification("Speech recognition not available")
+            updateNotification("Speech recognition not available on this device")
             return
         }
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
-        speechRecognizer?.setRecognitionListener(createListener())
         updateNotification("Ready — tap ✦ to speak")
     }
 
-    private fun createListener() = object : RecognitionListener {
-        override fun onReadyForSpeech(params: Bundle?) {
-            updateNotification("🎤 Listening...")
+    private fun createFreshRecognizer() {
+        try { speechRecognizer?.destroy() } catch (e: Exception) { }
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this)
+        speechRecognizer?.setRecognitionListener(object : RecognitionListener {
+
+            override fun onReadyForSpeech(params: Bundle?) {
+                updateNotification("🎤 Listening for your command...")
+            }
+
+            override fun onBeginningOfSpeech() {}
+
+            override fun onRmsChanged(rmsdB: Float) {}
+
+            override fun onBufferReceived(buffer: ByteArray?) {}
+
+            override fun onEndOfSpeech() {
+                updateNotification("Processing your command...")
+            }
+
+            override fun onError(error: Int) {
+                isListeningForCommand = false
+                notifyOverlayIdle()
+                val msg = when (error) {
+                    SpeechRecognizer.ERROR_NO_MATCH -> "Didn't catch that — try again"
+                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech detected"
+                    SpeechRecognizer.ERROR_AUDIO -> "Audio recording error"
+                    SpeechRecognizer.ERROR_NETWORK,
+                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network error — check internet"
+                    SpeechRecognizer.ERROR_NOT_ENOUGH_PERMISSIONS -> "Microphone permission needed"
+                    SpeechRecognizer.ERROR_SERVER -> "Server error — try again"
+                    else -> "Speech error ($error)"
+                }
+                updateNotification(msg)
+                if (error != SpeechRecognizer.ERROR_SPEECH_TIMEOUT &&
+                    error != SpeechRecognizer.ERROR_NO_MATCH) {
+                    speak(msg)
+                }
+            }
+
+            override fun onResults(results: Bundle?) {
+                isListeningForCommand = false
+                notifyOverlayIdle()
+                val matches = results
+                    ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                val command = matches?.firstOrNull()?.trim()?.lowercase()
+                if (!command.isNullOrBlank()) {
+                    updateNotification("Command: $command")
+                    DecisionRouter.route(this@WakeWordService, command)
+                } else {
+                    speak("I didn't catch that. Please try again.")
+                }
+            }
+
+            override fun onPartialResults(partialResults: Bundle?) {}
+            override fun onEvent(eventType: Int, params: Bundle?) {}
+        })
+    }
+
+    fun startCommandListening() {
+        if (isListeningForCommand) return
+        isListeningForCommand = true
+
+        mainHandler.post {
+            try {
+                createFreshRecognizer()
+                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(
+                        RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                        RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                    )
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.US)
+                    putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+                    putExtra(
+                        RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
+                        2500L
+                    )
+                    putExtra(
+                        RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
+                        2500L
+                    )
+                }
+                speechRecognizer?.startListening(intent)
+                toneGen?.startTone(ToneGenerator.TONE_PROP_BEEP, 200)
+            } catch (e: Exception) {
+                isListeningForCommand = false
+                notifyOverlayIdle()
+                speak("Could not start microphone: ${e.message}")
+            }
         }
+    }
 
-        override fun onBeginningOfSpeech() {}
+    // Notify overlay to go back to idle — no direct import needed
+    private fun notifyOverlayIdle() {
+        onCommandFinished?.invoke()
+    }
 
-        override fun onRmsChanged(rmsdB: Float) {}
-
-        override fun onBufferReceived(buffer: ByteArray?) {}
-
-        override fun onEndOfSpeech() {
-            updateNotification("Processing...")
+    fun speak(text: String) {
+        if (ttsReady) {
+            tts?.speak(
+                text,
+                TextToSpeech.QUEUE_FLUSH,
+                null,
+                "wws_${System.currentTimeMillis()}"
+            )
         }
+    }
 
-        override fun onError(error: Int) {
-            isListeningForCommand = false
-            overlayBinder?.updateState(false)
-            FloatingOverlay.instance?.setIdleState()
-            val msg = when (error) {
+    fun setOverlayBinder(b: FloatingOverlay.OverlayBinder?) {
+        // kept for compatibility — idle state now via static callback
+    }
+
+    private fun updateNotification(text: String) {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(NOTIFICATION_ID, buildNotification(text))
+    }
+
+    private fun buildNotification(text: String): Notification {
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("LaT OS")
+            .setContentText(text)
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
+            .build()
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Voice Service",
+                NotificationManager.IMPORTANCE_LOW
+            )
+            getSystemService(NotificationManager::class.java)
+                .createNotificationChannel(channel)
+        }
+    }
+
+    override fun onDestroy() {
+        try { speechRecognizer?.destroy() } catch (e: Exception) { }
+        toneGen?.release()
+        tts?.stop()
+        tts?.shutdown()
+        onCommandFinished = null
+        super.onDestroy()
+    }
+}
