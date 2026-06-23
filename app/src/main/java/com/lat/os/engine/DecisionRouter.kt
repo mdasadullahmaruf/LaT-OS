@@ -6,7 +6,6 @@ import android.media.AudioManager
 import android.speech.tts.TextToSpeech
 import com.lat.os.automation.DeviceAutomator
 import com.lat.os.automation.ScreenScraper
-import com.lat.os.data.Action
 import com.lat.os.data.SystemDatabase
 import kotlinx.coroutines.*
 import java.util.Locale
@@ -16,10 +15,8 @@ object DecisionRouter {
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var tts: TextToSpeech? = null
     private var ttsReady = false
-    private var appContext: Context? = null
 
     fun init(context: Context) {
-        appContext = context.applicationContext
         if (tts == null) {
             tts = TextToSpeech(context.applicationContext) { status ->
                 if (status == TextToSpeech.SUCCESS) {
@@ -31,116 +28,110 @@ object DecisionRouter {
     }
 
     fun route(context: Context, rawCommand: String) {
-        // Normalize — lowercase, trim, remove punctuation
-        val command = rawCommand.lowercase()
-            .trim()
-            .replace(Regex("[^a-z0-9 ]"), "")
-
+        val command = rawCommand.lowercase().trim()
         SystemDatabase(context).logCommand(command, "processing...")
 
-        val localAction = SemanticParser.parse(command)
-        if (localAction != null) {
-            executeLocal(context, localAction)
-        } else {
-            // Send to Gemini with full screen context
-            scope.launch {
-                speak("Let me think...")
-                val screenData = ScreenScraper.scrapeScreen()
-                val result = GeminiClient.askGemini(context, command, screenData)
-                if (result != null) {
-                    executeGeminiResult(context, result)
-                } else {
-                    // Last resort — try to open as app name
-                    val pkg = PackageMapper.findPackage(context, command
-                        .replace("open ", "")
-                        .replace("launch ", "")
-                        .replace("start ", "")
-                        .trim())
-                    if (pkg != null) {
-                        DeviceAutomator.openApp(context, pkg)
-                        speak("Opening that now")
-                    } else {
-                        speak("I'm not sure how to do that. Please try again.")
-                    }
+        scope.launch {
+            // Step 1: Try Gemini NLU first (handles all accent/casing issues)
+            val apiKey = context.getSharedPreferences("latos_prefs", Context.MODE_PRIVATE)
+                .getString("gemini_api_key", "")
+
+            if (!apiKey.isNullOrBlank()) {
+                val nlu = GeminiNLU.understand(context, command)
+                if (nlu != null && nlu.confidence >= 0.7) {
+                    executeNLU(context, nlu)
+                    return@launch
                 }
+            }
+
+            // Step 2: Fallback to local parser if no API key or low confidence
+            val localAction = SemanticParser.parse(command)
+            if (localAction != null) {
+                executeLocal(context, localAction)
+            } else {
+                speak("I'm not sure what you mean. Please try again.")
             }
         }
     }
 
-    private fun executeLocal(context: Context, action: Action) {
-        when (action.type) {
+    private suspend fun executeNLU(context: Context, nlu: NLUResult) {
+        val entity = nlu.entity.trim()
 
-            "OPEN_APP" -> {
-                // Normalize the app name — remove extra words, fix case
-                val appQuery = action.payload
-                    .lowercase()
-                    .trim()
-                    .replace(Regex("[^a-z0-9 ]"), "")
-                val pkg = PackageMapper.findPackage(context, appQuery)
+        when (nlu.intent) {
+
+            "LAUNCH_APP" -> {
+                val pkg = PackageMapper.findPackage(context, entity)
                 if (pkg != null) {
                     DeviceAutomator.openApp(context, pkg)
-                    speak("Opening ${action.payload}")
+                    speak("Opening $entity")
                 } else {
-                    // Try Gemini to figure out the app
-                    scope.launch {
-                        val screenData = ScreenScraper.scrapeScreen()
-                        val result = GeminiClient.askGemini(
-                            context,
-                            "open the app called ${action.payload}",
-                            screenData
-                        )
-                        if (result != null) {
-                            executeGeminiResult(context, result)
-                        } else {
-                            speak("I couldn't find ${action.payload} on your phone.")
-                        }
-                    }
+                    speak("I couldn't find $entity on your phone.")
                 }
             }
 
-            "GO_BACK" -> { DeviceAutomator.pressBack(); speak("Going back") }
-            "GO_HOME" -> { DeviceAutomator.pressHome(); speak("Home screen") }
-            "RECENTS" -> { DeviceAutomator.openRecents(); speak("Recent apps") }
-            "SCROLL_DOWN" -> { DeviceAutomator.scrollDown(); speak("Scrolling down") }
-            "SCROLL_UP" -> { DeviceAutomator.scrollUp(); speak("Scrolling up") }
-            "SCROLL_LEFT" -> { DeviceAutomator.scrollLeft(); speak("Scrolling left") }
-            "SCROLL_RIGHT" -> { DeviceAutomator.scrollRight(); speak("Scrolling right") }
-
-            "TAP_POSITION" -> {
-                DeviceAutomator.tapPosition(action.payload)
-                speak("Tapping ${action.payload.replace("_", " ")}")
+            "GO_BACK" -> {
+                DeviceAutomator.pressBack()
+                speak("Going back")
             }
 
-            "CALL_ACTION" -> {
-                DeviceAutomator.handleCallAction(action.payload)
-                when (action.payload) {
-                    "answer", "left" -> speak("Answering call")
-                    "decline", "right" -> speak("Declining call")
-                }
+            "GO_HOME" -> {
+                DeviceAutomator.pressHome()
+                speak("Home screen")
+            }
+
+            "OPEN_RECENTS" -> {
+                DeviceAutomator.openRecents()
+                speak("Recent apps")
+            }
+
+            "SCROLL_DOWN" -> {
+                DeviceAutomator.scrollDown()
+                speak("Scrolling down")
+            }
+
+            "SCROLL_UP" -> {
+                DeviceAutomator.scrollUp()
+                speak("Scrolling up")
+            }
+
+            "SCROLL_LEFT" -> {
+                DeviceAutomator.scrollLeft()
+                speak("Scrolling left")
+            }
+
+            "SCROLL_RIGHT" -> {
+                DeviceAutomator.scrollRight()
+                speak("Scrolling right")
             }
 
             "TAP_TEXT" -> {
-                val ok = DeviceAutomator.tapOnText(action.payload)
-                if (!ok) {
-                    // Try case-insensitive search via Gemini
-                    scope.launch {
-                        val screen = ScreenScraper.scrapeScreen()
-                        val result = GeminiClient.askGemini(
-                            context,
-                            "tap on ${action.payload}",
-                            screen
-                        )
-                        if (result != null) executeGeminiResult(context, result)
-                        else speak("Couldn't find ${action.payload} on screen")
-                    }
-                } else {
-                    speak("Tapped ${action.payload}")
-                }
+                val ok = DeviceAutomator.tapOnText(entity)
+                speak(if (ok) "Tapped $entity" else "Couldn't find $entity on screen")
+            }
+
+            "TAP_POSITION" -> {
+                DeviceAutomator.tapPosition(entity)
+                speak("Tapping ${entity.replace("_", " ")}")
             }
 
             "TYPE_TEXT" -> {
-                DeviceAutomator.typeText(action.payload)
-                speak("Typed ${action.payload}")
+                DeviceAutomator.typeText(entity)
+                speak("Typed $entity")
+            }
+
+            "SEARCH_QUERY" -> {
+                DeviceAutomator.typeText(entity)
+                speak("Searching for $entity")
+            }
+
+            "CALL_ANSWER" -> {
+                DeviceAutomator.handleCallAction("answer")
+                speak("Answering call")
+            }
+
+            "CALL_DECLINE" -> {
+                DeviceAutomator.handleCallAction("decline")
+                speak("Declining call")
             }
 
             "VOLUME_UP" -> {
@@ -163,61 +154,81 @@ object DecisionRouter {
                 speak("Opening notifications")
             }
 
-            "OPEN_QUICK_SETTINGS" -> {
+            "OPEN_SETTINGS" -> {
                 DeviceAutomator.openQuickSettings()
-                speak("Opening quick settings")
+                speak("Opening settings")
             }
 
-            else -> {
-                // Unknown local action — send to Gemini
-                scope.launch {
-                    val screen = ScreenScraper.scrapeScreen()
-                    val result = GeminiClient.askGemini(context, action.payload, screen)
-                    if (result != null) executeGeminiResult(context, result)
-                    else speak("I don't know how to do that yet.")
-                }
+            "MEDIA_PLAY" -> {
+                // Try to find and tap play button on screen
+                val ok = DeviceAutomator.tapOnText("Play")
+                if (!ok) DeviceAutomator.tapOnText("▶")
+                speak("Playing")
             }
+
+            "MEDIA_PAUSE" -> {
+                val ok = DeviceAutomator.tapOnText("Pause")
+                if (!ok) DeviceAutomator.tapOnText("⏸")
+                speak("Paused")
+            }
+
+            "MEDIA_NEXT" -> {
+                DeviceAutomator.tapOnText("Next")
+                speak("Next track")
+            }
+
+            "MEDIA_PREV" -> {
+                DeviceAutomator.tapOnText("Previous")
+                speak("Previous track")
+            }
+
+            "ANSWER_QUESTION" -> {
+                // Use Gemini to answer the question
+                val screenData = ScreenScraper.scrapeScreen()
+                val result = GeminiClient.askGemini(context, entity, screenData)
+                speak(result?.spoken_response ?: "I don't know the answer to that.")
+            }
+
+            "UNKNOWN" -> speak("I didn't understand that. Could you rephrase?")
+
+            else -> speak("I'm not sure how to do that yet.")
         }
+
+        SystemDatabase(context).logCommand(
+            "${nlu.intent}: $entity",
+            "confidence: ${nlu.confidence}"
+        )
     }
 
-    private fun executeGeminiResult(context: Context, result: GeminiResponse) {
-        when (result.action?.uppercase()) {
-            "TAP" -> {
-                val target = result.target_text ?: ""
-                val ok = DeviceAutomator.tapOnText(target)
-                speak(if (ok) result.spoken_response ?: "Done"
-                      else "Couldn't find $target on screen")
-            }
-            "TYPE" -> {
-                DeviceAutomator.typeText(result.payload ?: "")
-                speak(result.spoken_response ?: "Typed")
-            }
-            "SCROLL" -> {
-                when (result.payload?.lowercase()) {
-                    "up" -> DeviceAutomator.scrollUp()
-                    "left" -> DeviceAutomator.scrollLeft()
-                    "right" -> DeviceAutomator.scrollRight()
-                    else -> DeviceAutomator.scrollDown()
-                }
-                speak(result.spoken_response ?: "Scrolled")
-            }
-            "OPEN" -> {
-                val pkg = PackageMapper.findPackage(
-                    context, result.target_text ?: "")
+    private fun executeLocal(context: Context, action: com.lat.os.data.Action) {
+        when (action.type) {
+            "OPEN_APP" -> {
+                val pkg = PackageMapper.findPackage(context, action.payload)
                 if (pkg != null) {
                     DeviceAutomator.openApp(context, pkg)
-                    speak(result.spoken_response ?: "Opening")
+                    speak("Opening ${action.payload}")
                 } else {
-                    speak("Couldn't find that app")
+                    speak("Couldn't find ${action.payload}")
                 }
             }
-            "ANSWER" -> speak(result.spoken_response ?: "")
-            else -> speak(result.spoken_response ?: "Done")
+            "GO_BACK" -> { DeviceAutomator.pressBack(); speak("Going back") }
+            "GO_HOME" -> { DeviceAutomator.pressHome(); speak("Home screen") }
+            "RECENTS" -> { DeviceAutomator.openRecents(); speak("Recent apps") }
+            "SCROLL_DOWN" -> { DeviceAutomator.scrollDown(); speak("Scrolling down") }
+            "SCROLL_UP" -> { DeviceAutomator.scrollUp(); speak("Scrolling up") }
+            "SCROLL_LEFT" -> { DeviceAutomator.scrollLeft() }
+            "SCROLL_RIGHT" -> { DeviceAutomator.scrollRight() }
+            "TAP_POSITION" -> { DeviceAutomator.tapPosition(action.payload) }
+            "CALL_ACTION" -> { DeviceAutomator.handleCallAction(action.payload) }
+            "TAP_TEXT" -> { DeviceAutomator.tapOnText(action.payload) }
+            "TYPE_TEXT" -> { DeviceAutomator.typeText(action.payload) }
+            "VOLUME_UP" -> { adjustVolume(context, true); speak("Volume up") }
+            "VOLUME_DOWN" -> { adjustVolume(context, false); speak("Volume down") }
+            "SCREENSHOT" -> { DeviceAutomator.takeScreenshot(); speak("Screenshot taken") }
+            "OPEN_NOTIFICATIONS" -> { DeviceAutomator.openNotifications() }
+            "OPEN_QUICK_SETTINGS" -> { DeviceAutomator.openQuickSettings() }
+            else -> speak("I don't know how to do that.")
         }
-        SystemDatabase(context).logCommand(
-            result.action ?: "",
-            result.spoken_response ?: ""
-        )
     }
 
     private fun adjustVolume(context: Context, up: Boolean) {
