@@ -4,7 +4,6 @@ package com.lat.os.engine
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.content.pm.ResolveInfo
 
 object PackageMapper {
 
@@ -31,9 +30,9 @@ object PackageMapper {
         "google play" to "com.android.vending",
         "gemini" to "com.google.android.apps.bard",
         "google gemini" to "com.google.android.apps.bard",
-        "google assistant" to "com.google.android.googlequicksearchbox",
-        "google chrome" to "com.android.chrome",
         "chrome" to "com.android.chrome",
+        "google chrome" to "com.android.chrome",
+        "google assistant" to "com.google.android.googlequicksearchbox",
 
         // Social & Messaging
         "whatsapp" to "com.whatsapp",
@@ -53,16 +52,15 @@ object PackageMapper {
         "reddit" to "com.reddit.frontpage",
         "threads" to "com.instagram.barcelona",
 
-        // Phone & SMS — Vivo specific first
+        // Phone & SMS — Vivo specific
         "phone" to "com.vivo.phone",
         "dialer" to "com.vivo.phone",
-        "call" to "com.vivo.phone",
+        "contacts" to "com.vivo.contacts",
         "messages" to "com.vivo.message",
         "message" to "com.vivo.message",
         "sms" to "com.vivo.message",
-        "contacts" to "com.vivo.contacts",
 
-        // Vivo System Apps — from your scan
+        // Vivo System Apps from your scan
         "gallery" to "com.vivo.gallery",
         "albums" to "com.vivo.gallery",
         "browser" to "com.vivo.browser",
@@ -86,21 +84,26 @@ object PackageMapper {
         "vivo store" to "com.vivo.website",
         "weather" to "com.vivo.weather",
         "smart remote" to "com.vivo.vhome",
+        "digital wellbeing" to "com.google.android.apps.wellbeing",
+        "wellbeing" to "com.google.android.apps.wellbeing",
 
         // Streaming
         "netflix" to "com.netflix.mediaclient",
         "spotify" to "com.spotify.music",
         "hotstar" to "in.startv.hotstar",
         "disney" to "in.startv.hotstar",
+        "disney hotstar" to "in.startv.hotstar",
         "prime video" to "com.amazon.avod.thirdpartyclient",
+        "amazon prime" to "com.amazon.avod.thirdpartyclient",
         "amazon" to "com.amazon.mShop.android.shopping",
-        "jio cinema" to "com.jio.jiocinema",
         "mx player" to "com.mxtech.videoplayer.ad",
         "vlc" to "org.videolan.vlc",
+        "jio cinema" to "com.jio.jiocinema",
 
-        // Productivity
+        // Productivity & Work
         "zoom" to "us.zoom.videomeetings",
         "teams" to "com.microsoft.teams",
+        "microsoft teams" to "com.microsoft.teams",
         "outlook" to "com.microsoft.office.outlook",
         "word" to "com.microsoft.office.word",
         "excel" to "com.microsoft.office.excel",
@@ -111,52 +114,63 @@ object PackageMapper {
         "chatgpt" to "com.openai.chatgpt",
         "brave" to "com.brave.browser",
         "opera" to "com.opera.browser",
-        "firefox" to "org.mozilla.firefox"
+        "firefox" to "org.mozilla.firefox",
+        "edge" to "com.microsoft.emmx",
+
+        // Shopping
+        "flipkart" to "com.flipkart.android",
+        "meesho" to "com.meesho.supply",
+        "myntra" to "com.myntra.android",
+
+        // Payments
+        "gpay" to "com.google.android.apps.nbu.paisa.user",
+        "google pay" to "com.google.android.apps.nbu.paisa.user",
+        "phonepe" to "com.phonepe.app",
+        "paytm" to "net.one97.paytm"
     )
 
     fun findPackage(context: Context, query: String): String? {
         val q = query.lowercase().trim()
             .replace(Regex("[^a-z0-9 ]"), "")
 
-        // 1. Direct known map match
+        // 1. Exact match in known map
         knownApps[q]?.let { pkg ->
             if (isInstalled(context, pkg)) return pkg
         }
 
-        // 2. Partial known map match
+        // 2. Partial match in known map
         for ((name, pkg) in knownApps) {
             if (q == name || q.contains(name) || name.contains(q)) {
                 if (isInstalled(context, pkg)) return pkg
             }
         }
 
-        // 3. Scan ALL packages on device — not just launcher apps
-        val allPackages = getAllPackages(context)
+        // 3. Scan ALL installed apps on device
+        val allApps = getAllPackages(context)
 
         // Exact label match
-        for ((label, pkg) in allPackages) {
+        for ((label, pkg) in allApps) {
             if (label == q) return pkg
         }
 
-        // Label contains query
-        for ((label, pkg) in allPackages) {
+        // Label contains query or query contains label
+        for ((label, pkg) in allApps) {
             if (label.contains(q) || q.contains(label)) return pkg
         }
 
         // Package name contains query
-        for ((_, pkg) in allPackages) {
+        for ((_, pkg) in allApps) {
             val pkgLower = pkg.lowercase()
             val queryNoSpace = q.replace(" ", "")
             if (pkgLower.contains(queryNoSpace) ||
-                pkgLower.substringAfterLast(".").contains(queryNoSpace)) {
-                return pkg
-            }
+                pkgLower.substringAfterLast(".").contains(queryNoSpace)
+            ) return pkg
         }
 
-        // 4. Fuzzy Levenshtein match
+        // 4. Fuzzy Levenshtein — catches typos
         var bestPkg: String? = null
         var bestDist = Int.MAX_VALUE
-        for ((label, pkg) in allPackages) {
+        for ((label, pkg) in allApps) {
             val dist = levenshtein(q, label)
             if (dist < bestDist && dist <= 3) {
                 bestDist = dist
@@ -166,34 +180,39 @@ object PackageMapper {
         return bestPkg
     }
 
-    // Gets ALL installed apps — not just launcher ones
     private fun getAllPackages(context: Context): List<Pair<String, String>> {
         val pm = context.packageManager
         val results = mutableListOf<Pair<String, String>>()
 
-        // Method 1: Launcher apps
+        // Method 1: All installed applications
         try {
-            val launcherIntent = Intent(Intent.ACTION_MAIN).apply {
-                addCategory(Intent.CATEGORY_LAUNCHER)
-            }
-            pm.queryIntentActivities(launcherIntent, 0).forEach { info ->
-                results.add(Pair(
-                    info.loadLabel(pm).toString().lowercase().trim(),
-                    info.activityInfo.packageName
-                ))
-            }
+            pm.getInstalledApplications(PackageManager.GET_META_DATA)
+                .forEach { appInfo ->
+                    try {
+                        val pkg = appInfo.packageName
+                        val launchIntent = pm.getLaunchIntentForPackage(pkg)
+                        if (launchIntent != null) {
+                            val label = pm.getApplicationLabel(appInfo)
+                                .toString().lowercase().trim()
+                            if (results.none { it.second == pkg }) {
+                                results.add(Pair(label, pkg))
+                            }
+                        }
+                    } catch (e: Exception) { }
+                }
         } catch (e: Exception) { }
 
-        // Method 2: All installed packages
+        // Method 2: Launcher category
         try {
-            pm.getInstalledPackages(0).forEach { pkgInfo ->
+            val intent = Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
+            }
+            pm.queryIntentActivities(intent, 0).forEach { info ->
                 try {
-                    val appInfo = pkgInfo.applicationInfo
-                    val label = pm.getApplicationLabel(appInfo)
-                        .toString().lowercase().trim()
-                    val pkg = pkgInfo.packageName
-                    // Only add if has a launch intent
-                    if (pm.getLaunchIntentForPackage(pkg) != null) {
+                    val label = info.loadLabel(pm).toString()
+                        .lowercase().trim()
+                    val pkg = info.activityInfo.packageName
+                    if (results.none { it.second == pkg }) {
                         results.add(Pair(label, pkg))
                     }
                 } catch (e: Exception) { }
@@ -202,14 +221,17 @@ object PackageMapper {
 
         // Method 3: All main activities
         try {
-            val mainIntent = Intent(Intent.ACTION_MAIN)
-            pm.queryIntentActivities(mainIntent,
-                PackageManager.GET_META_DATA).forEach { info ->
+            val intent = Intent(Intent.ACTION_MAIN)
+            pm.queryIntentActivities(
+                intent, PackageManager.GET_META_DATA
+            ).forEach { info ->
                 try {
-                    results.add(Pair(
-                        info.loadLabel(pm).toString().lowercase().trim(),
-                        info.activityInfo.packageName
-                    ))
+                    val label = info.loadLabel(pm).toString()
+                        .lowercase().trim()
+                    val pkg = info.activityInfo.packageName
+                    if (results.none { it.second == pkg }) {
+                        results.add(Pair(label, pkg))
+                    }
                 } catch (e: Exception) { }
             }
         } catch (e: Exception) { }
@@ -220,7 +242,9 @@ object PackageMapper {
     fun isInstalled(context: Context, packageName: String): Boolean {
         return try {
             context.packageManager.getLaunchIntentForPackage(packageName) != null
-        } catch (e: Exception) { false }
+        } catch (e: Exception) {
+            false
+        }
     }
 
     private fun levenshtein(a: String, b: String): Int {
@@ -229,8 +253,11 @@ object PackageMapper {
         for (j in 0..b.length) dp[0][j] = j
         for (i in 1..a.length) {
             for (j in 1..b.length) {
-                dp[i][j] = if (a[i-1] == b[j-1]) dp[i-1][j-1]
-                else 1 + minOf(dp[i-1][j], dp[i][j-1], dp[i-1][j-1])
+                dp[i][j] = if (a[i - 1] == b[j - 1]) {
+                    dp[i - 1][j - 1]
+                } else {
+                    1 + minOf(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1])
+                }
             }
         }
         return dp[a.length][b.length]
