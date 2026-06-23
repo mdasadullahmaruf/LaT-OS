@@ -6,96 +6,75 @@ import com.lat.os.data.Action
 object SemanticParser {
 
     fun parse(input: String): Action? {
-        val text = input.lowercase().trim()
+        val t = input.lowercase().trim()
+            .replace(Regex("[^a-z0-9 ]"), "")
 
-        // ── APP OPENING ──────────────────────────────────────────
-        Regex("^(open|launch|start|run|go to|show)\\s+(.+)$")
-            .find(text)?.let {
-                return Action("OPEN_APP", it.groupValues[2].trim())
+        // ── OPEN APP ─────────────────────────────────────────────
+        listOf("open ", "launch ", "start ", "run ", "go to ", "show me ")
+            .forEach { prefix ->
+                if (t.startsWith(prefix)) {
+                    val app = t.removePrefix(prefix).trim()
+                    if (app.isNotBlank()) return Action("OPEN_APP", app)
+                }
             }
 
         // ── NAVIGATION ───────────────────────────────────────────
-        if (text.matches(Regex(".*(go back|back button|navigate back).*")))
-            return Action("GO_BACK", "")
-        if (text.matches(Regex(".*(go home|home screen|home button).*")))
-            return Action("GO_HOME", "")
-        if (text.matches(Regex(".*(recent apps|recent|recents|app switcher).*")))
-            return Action("RECENTS", "")
+        if (t.contains("go back") || t == "back") return Action("GO_BACK", "")
+        if (t.contains("go home") || t == "home") return Action("GO_HOME", "")
+        if (t.contains("recent") || t.contains("recents")) return Action("RECENTS", "")
 
-        // ── SCROLLING ────────────────────────────────────────────
-        if (text.matches(Regex(".*(scroll down|swipe up|move down).*")))
+        // ── SCROLL / SWIPE ────────────────────────────────────────
+        if (t.contains("scroll down") || t.contains("swipe up"))
             return Action("SCROLL_DOWN", "")
-        if (text.matches(Regex(".*(scroll up|swipe down|move up).*")))
+        if (t.contains("scroll up") || t.contains("swipe down"))
             return Action("SCROLL_UP", "")
-        if (text.matches(Regex(".*(scroll left|swipe left|move left).*")))
+        if (t.contains("scroll left") || t.contains("swipe left"))
             return Action("SCROLL_LEFT", "")
-        if (text.matches(Regex(".*(scroll right|swipe right|move right).*")))
+        if (t.contains("scroll right") || t.contains("swipe right"))
             return Action("SCROLL_RIGHT", "")
 
-        // ── SCREEN TAPPING BY POSITION ───────────────────────────
-        // "tap top left", "touch center", "click bottom right" etc.
-        if (text.matches(Regex(".*(tap|touch|click|press).*(top left|upper left).*")))
+        // ── TAP POSITION ─────────────────────────────────────────
+        if (t.contains("top left") || t.contains("upper left"))
             return Action("TAP_POSITION", "top_left")
-        if (text.matches(Regex(".*(tap|touch|click|press).*(top right|upper right).*")))
+        if (t.contains("top right") || t.contains("upper right"))
             return Action("TAP_POSITION", "top_right")
-        if (text.matches(Regex(".*(tap|touch|click|press).*(bottom left|lower left).*")))
+        if (t.contains("bottom left") || t.contains("lower left"))
             return Action("TAP_POSITION", "bottom_left")
-        if (text.matches(Regex(".*(tap|touch|click|press).*(bottom right|lower right).*")))
+        if (t.contains("bottom right") || t.contains("lower right"))
             return Action("TAP_POSITION", "bottom_right")
-        if (text.matches(Regex(".*(tap|touch|click|press).*(center|middle).*")))
+        if (t.contains("center") || t.contains("middle"))
             return Action("TAP_POSITION", "center")
-        if (text.matches(Regex(".*(tap|touch|click|press).*(top|upper).*(center)?.*")))
-            return Action("TAP_POSITION", "top_center")
-        if (text.matches(Regex(".*(tap|touch|click|press).*(bottom|lower).*(center)?.*")))
-            return Action("TAP_POSITION", "bottom_center")
-        if (text.matches(Regex(".*(tap|touch|click|press).*(left).*")))
-            return Action("TAP_POSITION", "center_left")
-        if (text.matches(Regex(".*(tap|touch|click|press).*(right).*")))
-            return Action("TAP_POSITION", "center_right")
 
-        // ── CALL LEFT / CALL RIGHT (answer/decline) ──────────────
-        if (text.matches(Regex(".*(call left|answer left|swipe call left).*")))
-            return Action("CALL_ACTION", "left")
-        if (text.matches(Regex(".*(call right|answer right|swipe call right).*")))
-            return Action("CALL_ACTION", "right")
-        if (text.matches(Regex(".*(answer|accept).*(call)?.*")))
+        // ── CALL ─────────────────────────────────────────────────
+        if (t.contains("answer") || t.contains("call left") || t.contains("accept call"))
             return Action("CALL_ACTION", "answer")
-        if (text.matches(Regex(".*(decline|reject|hang up|end call).*")))
+        if (t.contains("decline") || t.contains("reject") ||
+            t.contains("call right") || t.contains("hang up") || t.contains("end call"))
             return Action("CALL_ACTION", "decline")
 
-        // ── TEXT INTERACTION ─────────────────────────────────────
-        Regex("^(click|tap|press)\\s+(.+)$").find(text)?.let {
-            return Action("TAP_TEXT", it.groupValues[2].trim())
-        }
-        Regex("^type\\s+(.+)$").find(text)?.let {
-            return Action("TYPE_TEXT", it.groupValues[1].trim())
-        }
-        Regex("^(search|find|look up)\\s+(.+)$").find(text)?.let {
-            return Action("TYPE_TEXT", it.groupValues[2].trim())
-        }
+        // ── TYPE ─────────────────────────────────────────────────
+        if (t.startsWith("type "))
+            return Action("TYPE_TEXT", t.removePrefix("type ").trim())
+        if (t.startsWith("write "))
+            return Action("TYPE_TEXT", t.removePrefix("write ").trim())
 
         // ── VOLUME ───────────────────────────────────────────────
-        if (text.matches(Regex(".*(volume up|increase volume|louder).*")))
-            return Action("VOLUME_UP", "")
-        if (text.matches(Regex(".*(volume down|decrease volume|quieter|mute).*")))
+        if (t.contains("volume up") || t.contains("louder") ||
+            t.contains("increase volume")) return Action("VOLUME_UP", "")
+        if (t.contains("volume down") || t.contains("mute") ||
+            t.contains("quieter") || t.contains("lower volume"))
             return Action("VOLUME_DOWN", "")
 
-        // ── BRIGHTNESS ───────────────────────────────────────────
-        if (text.matches(Regex(".*(brightness up|increase brightness|brighter).*")))
-            return Action("BRIGHTNESS_UP", "")
-        if (text.matches(Regex(".*(brightness down|decrease brightness|dimmer).*")))
-            return Action("BRIGHTNESS_DOWN", "")
-
         // ── SCREENSHOT ───────────────────────────────────────────
-        if (text.matches(Regex(".*(screenshot|screen shot|capture screen).*")))
-            return Action("SCREENSHOT", "")
+        if (t.contains("screenshot") || t.contains("screen shot") ||
+            t.contains("capture screen")) return Action("SCREENSHOT", "")
 
         // ── NOTIFICATIONS ────────────────────────────────────────
-        if (text.matches(Regex(".*(open notifications|notification bar|pull down).*")))
+        if (t.contains("notification") || t.contains("pull down"))
             return Action("OPEN_NOTIFICATIONS", "")
 
         // ── QUICK SETTINGS ───────────────────────────────────────
-        if (text.matches(Regex(".*(quick settings|control center|settings panel).*")))
+        if (t.contains("quick settings") || t.contains("control center"))
             return Action("OPEN_QUICK_SETTINGS", "")
 
         return null
