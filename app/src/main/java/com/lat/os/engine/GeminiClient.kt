@@ -1,15 +1,16 @@
-
-// com/lat/os/engine/GeminiClient.kt
+// app/src/main/java/com/lat/os/engine/GeminiClient.kt
 package com.lat.os.engine
 
 import android.content.Context
-import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.TimeUnit
 
 data class GeminiResponse(
     val action: String?,
@@ -19,71 +20,77 @@ data class GeminiResponse(
 )
 
 object GeminiClient {
-    private val client = OkHttpClient()
-    private val gson = Gson()
-    private val conversationHistory = mutableListOf<Map<String, Any>>()
 
-    suspend fun askGemini(context: Context, userQuery: String, screenContext: String): GeminiResponse? {
-        val apiKey = context.getSharedPreferences("latos_prefs", Context.MODE_PRIVATE)
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .build()
+
+    suspend fun askGemini(
+        context: Context,
+        userQuery: String,
+        screenContext: String
+    ): GeminiResponse? {
+        val apiKey = context
+            .getSharedPreferences("latos_prefs", Context.MODE_PRIVATE)
             .getString("gemini_api_key", "") ?: return null
+
         if (apiKey.isBlank()) return null
 
-        // Build prompt with screen context
         val systemPrompt = """
-You are an automation assistant on Android. Your job is to convert the user's spoken command into a precise screen interaction.
-Current screen elements (simplified):
+You are an Android automation assistant.
+Current screen content:
 $screenContext
 
-Respond ONLY with a JSON object in this exact format, no additional text:
-{
-  "action": "TAP | TYPE | SCROLL | ANSWER",
-  "target_text": "string_to_find",
-  "payload": "text_to_type_if_applicable",
-  "spoken_response": "What to say to the user"
-}
-""".trimIndent()
+User command: $userQuery
 
-        conversationHistory.add(mapOf("role" to "user", "parts" to listOf(mapOf("text" to userQuery))))
-        conversationHistory.add(mapOf("role" to "model", "parts" to listOf(mapOf("text" to "")))) // placeholder
-
-        val contents = JSONArray()
-        conversationHistory.forEach { msg ->
-            val obj = JSONObject()
-            obj.put("role", msg["role"])
-            obj.put("parts", JSONArray((msg["parts"] as List<*>)))
-            contents.put(obj)
-        }
-
-        val requestBody = JSONObject().apply {
-            put("contents", contents)
-            put("systemInstruction", JSONObject().apply {
-                put("role", "user")
-                put("parts", JSONArray().apply {
-                    put(JSONObject().apply { put("text", systemPrompt) })
-                })
-            })
-        }
-
-        val request = Request.Builder()
-            .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=$apiKey")
-            .post(RequestBody.create("application/json".toMediaType(), requestBody.toString()))
-            .build()
+Respond with ONLY a JSON object:
+{"action":"TAP|TYPE|SCROLL|ANSWER","target_text":"text","payload":"value","spoken_response":"what to say"}
+        """.trimIndent()
 
         return withContext(Dispatchers.IO) {
             try {
+                val body = JSONObject().apply {
+                    put("contents", JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("role", "user")
+                            put("parts", JSONArray().apply {
+                                put(JSONObject().apply {
+                                    put("text", systemPrompt)
+                                })
+                            })
+                        })
+                    })
+                }.toString()
+
+                val request = Request.Builder()
+                    .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=$apiKey")
+                    .post(body.toRequestBody("application/json".toMediaType()))
+                    .build()
+
                 val response = client.newCall(request).execute()
-                val body = response.body?.string() ?: return@withContext null
-                val json = JSONObject(body)
-                val candidates = json.getJSONArray("candidates")
-                if (candidates.length() > 0) {
-                    val candidate = candidates.getJSONObject(0)
-                    val content = candidate.getJSONObject("content")
-                    val parts = content.getJSONArray("parts")
-                    val text = parts.getJSONObject(0).getString("text")
-                    // Extract JSON from response (may contain markdown fences)
-                    val cleanJson = text.replace("```json", "").replace("```", "").trim()
-                    gson.fromJson(cleanJson, GeminiResponse::class.java)
-                } else null
+                val responseBody = response.body?.string() ?: return@withContext null
+
+                val json = JSONObject(responseBody)
+                val text = json
+                    .getJSONArray("candidates")
+                    .getJSONObject(0)
+                    .getJSONObject("content")
+                    .getJSONArray("parts")
+                    .getJSONObject(0)
+                    .getString("text")
+                    .trim()
+                    .replace("```json", "")
+                    .replace("```", "")
+                    .trim()
+
+                val parsed = JSONObject(text)
+                GeminiResponse(
+                    action = parsed.optString("action"),
+                    target_text = parsed.optString("target_text"),
+                    payload = parsed.optString("payload"),
+                    spoken_response = parsed.optString("spoken_response")
+                )
             } catch (e: Exception) {
                 e.printStackTrace()
                 null
