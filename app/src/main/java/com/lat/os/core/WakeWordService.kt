@@ -55,7 +55,7 @@ class WakeWordService : Service() {
         }
         DecisionRouter.init(this)
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            updateNotification("Speech recognition not available on this device")
+            updateNotification("Speech recognition not available")
         } else {
             updateNotification("Ready — tap ✦ to speak")
         }
@@ -71,32 +71,39 @@ class WakeWordService : Service() {
         speechRecognizer?.setRecognitionListener(object : RecognitionListener {
 
             override fun onReadyForSpeech(params: Bundle?) {
-                updateNotification("🎤 Listening for your command...")
+                updateNotification("🎤 Listening...")
             }
 
             override fun onBeginningOfSpeech() {}
-
             override fun onRmsChanged(rmsdB: Float) {}
-
             override fun onBufferReceived(buffer: ByteArray?) {}
 
             override fun onEndOfSpeech() {
-                updateNotification("Processing your command...")
+                updateNotification("Processing...")
             }
 
             override fun onError(error: Int) {
                 isListeningForCommand = false
                 notifyOverlayIdle()
+
+                // Error 11 = mic busy, retry after short delay
+                if (error == 11 || error == SpeechRecognizer.ERROR_AUDIO) {
+                    updateNotification("Mic busy, retrying...")
+                    mainHandler.postDelayed({
+                        startCommandListening()
+                    }, 800)
+                    return
+                }
+
                 val msg = when (error) {
                     SpeechRecognizer.ERROR_NO_MATCH -> "Didn't catch that — try again"
                     SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech detected"
-                    SpeechRecognizer.ERROR_AUDIO -> "Audio recording error"
                     SpeechRecognizer.ERROR_NETWORK -> "Network error — check internet"
-                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout — try again"
-                    SpeechRecognizer.ERROR_SERVER -> "Server error — try again"
+                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout"
+                    SpeechRecognizer.ERROR_SERVER -> "Server error"
                     SpeechRecognizer.ERROR_CLIENT -> "Client error"
                     SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Microphone permission needed"
-                    else -> "Speech error ($error)"
+                    else -> "Error ($error) — try again"
                 }
                 updateNotification(msg)
                 if (error != SpeechRecognizer.ERROR_SPEECH_TIMEOUT &&
@@ -124,10 +131,12 @@ class WakeWordService : Service() {
         })
     }
 
+    // Called from FloatingOverlay after TTS finishes speaking
     fun startCommandListening() {
         if (isListeningForCommand) return
         isListeningForCommand = true
-        mainHandler.post {
+        // Wait 600ms for TTS audio to fully release mic
+        mainHandler.postDelayed({
             try {
                 createFreshRecognizer()
                 val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
@@ -139,11 +148,11 @@ class WakeWordService : Service() {
                     putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
                     putExtra(
                         RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,
-                        2500L
+                        3000L
                     )
                     putExtra(
                         RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,
-                        2500L
+                        2000L
                     )
                 }
                 speechRecognizer?.startListening(intent)
@@ -151,27 +160,21 @@ class WakeWordService : Service() {
             } catch (e: Exception) {
                 isListeningForCommand = false
                 notifyOverlayIdle()
-                speak("Could not start microphone: ${e.message}")
+                speak("Could not start microphone.")
             }
-        }
+        }, 600) // 600ms delay fixes Error 11
     }
 
-    fun setOverlayBinder(b: FloatingOverlay.OverlayBinder?) {
-        // kept for compatibility
-    }
+    fun setOverlayBinder(b: FloatingOverlay.OverlayBinder?) { }
 
     private fun notifyOverlayIdle() {
-        onCommandFinished?.invoke()
+        mainHandler.post { onCommandFinished?.invoke() }
     }
 
     fun speak(text: String) {
         if (ttsReady) {
-            tts?.speak(
-                text,
-                TextToSpeech.QUEUE_FLUSH,
-                null,
-                "wws_${System.currentTimeMillis()}"
-            )
+            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null,
+                "wws_${System.currentTimeMillis()}")
         }
     }
 
@@ -193,8 +196,7 @@ class WakeWordService : Service() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Voice Service",
+                CHANNEL_ID, "Voice Service",
                 NotificationManager.IMPORTANCE_LOW
             )
             getSystemService(NotificationManager::class.java)
