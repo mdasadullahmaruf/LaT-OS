@@ -56,10 +56,14 @@ class FloatingOverlay : Service(), TextToSpeech.OnInitListener {
     private val wakeWordConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             wakeWordService = (service as WakeWordService.LocalBinder).getService()
-            wakeWordService?.setOverlayBinder(binder)
+            // Register idle callback — no circular reference
+            WakeWordService.onCommandFinished = {
+                setIdleState()
+            }
         }
         override fun onServiceDisconnected(name: ComponentName?) {
             wakeWordService = null
+            WakeWordService.onCommandFinished = null
         }
     }
 
@@ -123,13 +127,11 @@ class FloatingOverlay : Service(), TextToSpeech.OnInitListener {
 
             setOnTouchListener(object : View.OnTouchListener {
                 private var hasMoved = false
-                private var downTime = 0L
 
                 override fun onTouch(v: View, event: MotionEvent): Boolean {
                     when (event.action) {
                         MotionEvent.ACTION_DOWN -> {
                             hasMoved = false
-                            downTime = System.currentTimeMillis()
                             initialX = params.x
                             initialY = params.y
                             initialTouchX = event.rawX
@@ -139,9 +141,7 @@ class FloatingOverlay : Service(), TextToSpeech.OnInitListener {
                         MotionEvent.ACTION_MOVE -> {
                             val dx = (event.rawX - initialTouchX).toInt()
                             val dy = (event.rawY - initialTouchY).toInt()
-                            if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
-                                hasMoved = true
-                            }
+                            if (Math.abs(dx) > 8 || Math.abs(dy) > 8) hasMoved = true
                             params.x = initialX + dx
                             params.y = initialY + dy
                             try {
@@ -150,9 +150,7 @@ class FloatingOverlay : Service(), TextToSpeech.OnInitListener {
                             return true
                         }
                         MotionEvent.ACTION_UP -> {
-                            if (!hasMoved) {
-                                onButtonTapped()
-                            }
+                            if (!hasMoved) onButtonTapped()
                             return true
                         }
                     }
@@ -170,61 +168,45 @@ class FloatingOverlay : Service(), TextToSpeech.OnInitListener {
 
     private fun onButtonTapped() {
         if (isListening) {
-            // Already listening — stop
             setIdleState()
             speak("Cancelled.")
             return
         }
-
-        // Activate listening state
         setActiveState()
-
-        // Play activation beep immediately
         toneGen?.startTone(ToneGenerator.TONE_PROP_ACK, 300)
-
-        // Then speak confirmation
-        postDelayed {
-            speak("Yes, I'm listening. What can I do for you?")
-        }
-
-        // Tell WakeWordService to capture next command
+        overlayView?.postDelayed({
+            speak("Yes, I'm listening.")
+        }, 100)
         wakeWordService?.startCommandListening()
     }
 
-    private fun setActiveState() {
+    fun setActiveState() {
         isListening = true
         overlayView?.post {
-            overlayView?.setBackgroundColor(0xFF0F9D58.toInt()) // green
+            overlayView?.setBackgroundColor(0xFF0F9D58.toInt())
             overlayView?.text = "🎤"
         }
-        // Auto-reset to idle after 10 seconds if no command received
+        // Safety auto-reset after 12 seconds
         overlayView?.postDelayed({
-            if (isListening) {
-                setIdleState()
-            }
-        }, 10000)
+            if (isListening) setIdleState()
+        }, 12000)
     }
 
     fun setIdleState() {
         isListening = false
         overlayView?.post {
-            overlayView?.setBackgroundColor(0xFFD32F2F.toInt()) // red
+            overlayView?.setBackgroundColor(0xFFD32F2F.toInt())
             overlayView?.text = "✦"
         }
     }
 
     private fun speak(text: String) {
         if (ttsReady) {
-            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "overlay_${System.currentTimeMillis()}")
+            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null,
+                "overlay_${System.currentTimeMillis()}")
         } else {
-            // TTS not ready yet, retry after short delay
-            overlayView?.postDelayed({ speak(text) }, 500)
+            overlayView?.postDelayed({ speak(text) }, 600)
         }
-    }
-
-    // Helper to post delayed runnable on UI thread
-    private fun postDelayed(delayMs: Long = 400, action: () -> Unit) {
-        overlayView?.postDelayed(action, delayMs)
     }
 
     private fun buildNotification(): Notification {
@@ -249,9 +231,7 @@ class FloatingOverlay : Service(), TextToSpeech.OnInitListener {
                 CHANNEL_ID,
                 "Overlay Service",
                 NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "LaT OS floating button"
-            }
+            ).apply { description = "LaT OS floating button" }
             getSystemService(NotificationManager::class.java)
                 .createNotificationChannel(channel)
         }
@@ -259,6 +239,7 @@ class FloatingOverlay : Service(), TextToSpeech.OnInitListener {
 
     override fun onDestroy() {
         instance = null
+        WakeWordService.onCommandFinished = null
         tts?.stop()
         tts?.shutdown()
         toneGen?.release()
