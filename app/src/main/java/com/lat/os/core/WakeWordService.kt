@@ -1,27 +1,24 @@
-
-// com/lat/os/core/WakeWordService.kt
+// app/src/main/java/com/lat/os/core/WakeWordService.kt
 package com.lat.os.core
 
 import android.app.*
 import android.content.Context
 import android.content.Intent
-import android.media.AudioFormat
-import android.media.AudioRecord
-import android.media.MediaRecorder
 import android.media.ToneGenerator
+import android.media.AudioManager
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
-import android.os.PowerManager
+import android.speech.tts.TextToSpeech
 import androidx.core.app.NotificationCompat
 import com.lat.os.engine.DecisionRouter
 import org.vosk.Model
 import org.vosk.Recognizer
 import org.vosk.android.RecognitionListener
 import org.vosk.android.SpeechService
-import org.vosk.android.StorageService
 import java.io.File
 import java.io.IOException
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
 class WakeWordService : Service() {
@@ -30,18 +27,20 @@ class WakeWordService : Service() {
         const val CHANNEL_ID = "wake_word_channel"
         const val NOTIFICATION_ID = 1
         const val SAMPLE_RATE = 16000f
+        const val WAKE_WORD = "hey phone"
     }
 
-    private lateinit var recognizer: Recognizer
     private var speechService: SpeechService? = null
-    private var wakeWordDetected = AtomicBoolean(false)
-    private var isListeningForCommand = AtomicBoolean(false)
+    private var recognizer: Recognizer? = null
     private var toneGen: ToneGenerator? = null
+    private var tts: TextToSpeech? = null
     private var overlayBinder: FloatingOverlay.OverlayBinder? = null
+    private val isListeningForCommand = AtomicBoolean(false)
 
     inner class LocalBinder : Binder() {
         fun getService(): WakeWordService = this@WakeWordService
     }
+
     private val binder = LocalBinder()
 
     override fun onBind(intent: Intent?): IBinder = binder
@@ -49,11 +48,17 @@ class WakeWordService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
-        toneGen = ToneGenerator(android.media.AudioManager.STREAM_NOTIFICATION, 80)
+        toneGen = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80)
+        tts = TextToSpeech(this) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                tts?.language = Locale.getDefault()
+            }
+        }
+        DecisionRouter.init(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIFICATION_ID, buildNotification("Idle"))
+        startForeground(NOTIFICATION_ID, buildNotification("Listening for 'Hey Phone'..."))
         initVosk()
         return START_STICKY
     }
@@ -61,54 +66,84 @@ class WakeWordService : Service() {
     private fun initVosk() {
         val modelDir = File(getExternalFilesDir(null), "vosk-model-small-en-us-0.15")
         if (!modelDir.exists()) {
-            // In a real deployment, download the model here; for now, log.
-            updateNotification("Model not found, please place model at ${modelDir.absolutePath}")
+            updateNotification("⚠ Vosk model missing — tap button to use manually")
+            speak("Wake word unavailable. Tap the floating button to give commands.")
             return
         }
-
         try {
             val model = Model(modelDir.absolutePath)
             recognizer = Recognizer(model, SAMPLE_RATE)
-            speechService = SpeechService(recognizer, SAMPLE_RATE)
-            speechService?.startListening(object : RecognitionListener {
-                override fun onPartialResult(hypothesis: String?) {}
-                override fun onResult(hypothesis: String?) {
-                    hypothesis?.let {
-                        if (isListeningForCommand.get()) {
-                            isListeningForCommand.set(false)
-                            updateOverlayState(false)
-                            DecisionRouter.route(this@WakeWordService, it.trim().lowercase())
-                        } else if (it.lowercase().contains("hey phone")) {
-                            wakeWordDetected.set(true)
-                            toneGen?.startTone(ToneGenerator.TONE_PROP_ACK)
-                            startCommandListening()
-                        }
-                    }
-                }
-                override fun onFinalResult(hypothesis: String?) {}
-                override fun onError(exception: Exception?) {}
-                override fun onTimeout() {}
-            })
+            speechService = SpeechService(recognizer!!, SAMPLE_RATE)
+            speechService?.startListening(createListener())
+            updateNotification("🎤 Listening for 'Hey Phone'")
         } catch (e: IOException) {
-            e.printStackTrace()
-            updateNotification("Vosk init failed: ${e.message}")
+            updateNotification("Vosk error: ${e.message}")
         }
+    }
+
+    private fun createListener() = object : RecognitionListener {
+        override fun onPartialResult(hypothesis: String?) {
+            hypothesis ?: return
+            // Check partial results too for faster response
+            if (!isListeningForCommand.get() &&
+                hypothesis.lowercase().contains(WAKE_WORD)) {
+                onWakeWordDetected()
+            }
+        }
+
+        override fun onResult(hypothesis: String?) {
+            hypothesis ?: return
+            val text = hypothesis.lowercase()
+            if (isListeningForCommand.get()) {
+                // This is the command after wake word
+                isListeningForCommand.set(false)
+                overlayBinder?.updateState(false)
+                // Extract actual text from Vosk JSON
+                val cleaned = text
+                    .replace("{\"text\" : \"", "")
+                    .replace("\"}", "")
+                    .trim()
+                if (cleaned.isNotBlank() && cleaned != WAKE_WORD) {
+                    DecisionRouter.route(this@WakeWordService, cleaned)
+                }
+            } else if (text.contains(WAKE_WORD)) {
+                onWakeWordDetected()
+            }
+        }
+
+        override fun onFinalResult(hypothesis: String?) {}
+        override fun onError(exception: Exception?) {
+            updateNotification("STT Error: ${exception?.message}")
+        }
+        override fun onTimeout() {
+            if (isListeningForCommand.get()) {
+                isListeningForCommand.set(false)
+                overlayBinder?.updateState(false)
+                speak("I didn't catch that. Try again.")
+            }
+        }
+    }
+
+    private fun onWakeWordDetected() {
+        toneGen?.startTone(ToneGenerator.TONE_PROP_ACK, 200)
+        speak("Yes?")
+        startCommandListening()
     }
 
     fun startCommandListening() {
         if (isListeningForCommand.get()) return
         isListeningForCommand.set(true)
-        updateOverlayState(true)
-        // Restart listening to capture command (SpeechService is already running)
-        toneGen?.startTone(ToneGenerator.TONE_PROP_BEEP)
+        overlayBinder?.updateState(true)
+        toneGen?.startTone(ToneGenerator.TONE_PROP_BEEP, 150)
+        updateNotification("🟢 Listening for command...")
     }
 
-    fun setOverlayBinder(binder: FloatingOverlay.OverlayBinder?) {
-        this.overlayBinder = binder
+    fun setOverlayBinder(b: FloatingOverlay.OverlayBinder?) {
+        overlayBinder = b
     }
 
-    private fun updateOverlayState(active: Boolean) {
-        overlayBinder?.updateState(active)
+    private fun speak(text: String) {
+        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "wws_${System.currentTimeMillis()}")
     }
 
     private fun updateNotification(text: String) {
@@ -120,7 +155,7 @@ class WakeWordService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("LaT OS")
             .setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .build()
@@ -129,17 +164,21 @@ class WakeWordService : Service() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                CHANNEL_ID, "Voice Service", NotificationManager.IMPORTANCE_LOW
+                CHANNEL_ID, "Voice Service",
+                NotificationManager.IMPORTANCE_LOW
             )
-            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+            getSystemService(NotificationManager::class.java)
+                .createNotificationChannel(channel)
         }
     }
 
     override fun onDestroy() {
         speechService?.stop()
         speechService?.shutdown()
-        recognizer.close()
+        recognizer?.close()
         toneGen?.release()
+        tts?.stop()
+        tts?.shutdown()
         super.onDestroy()
     }
 }
