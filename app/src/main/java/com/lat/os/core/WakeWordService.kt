@@ -25,9 +25,6 @@ class WakeWordService : Service() {
     companion object {
         const val CHANNEL_ID = "wake_word_channel"
         const val NOTIFICATION_ID = 1
-
-        // Static callback so FloatingOverlay can reset state
-        // without circular import
         var onCommandFinished: (() -> Unit)? = null
     }
 
@@ -57,19 +54,15 @@ class WakeWordService : Service() {
             }
         }
         DecisionRouter.init(this)
-        initSpeechRecognizer()
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            updateNotification("Speech recognition not available on this device")
+        } else {
+            updateNotification("Ready — tap ✦ to speak")
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         return START_STICKY
-    }
-
-    private fun initSpeechRecognizer() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            updateNotification("Speech recognition not available on this device")
-            return
-        }
-        updateNotification("Ready — tap ✦ to speak")
     }
 
     private fun createFreshRecognizer() {
@@ -98,10 +91,11 @@ class WakeWordService : Service() {
                     SpeechRecognizer.ERROR_NO_MATCH -> "Didn't catch that — try again"
                     SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "No speech detected"
                     SpeechRecognizer.ERROR_AUDIO -> "Audio recording error"
-                    SpeechRecognizer.ERROR_NETWORK,
-                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network error — check internet"
-                    SpeechRecognizer.ERROR_NOT_ENOUGH_PERMISSIONS -> "Microphone permission needed"
+                    SpeechRecognizer.ERROR_NETWORK -> "Network error — check internet"
+                    SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Network timeout — try again"
                     SpeechRecognizer.ERROR_SERVER -> "Server error — try again"
+                    SpeechRecognizer.ERROR_CLIENT -> "Client error"
+                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Microphone permission needed"
                     else -> "Speech error ($error)"
                 }
                 updateNotification(msg)
@@ -133,7 +127,6 @@ class WakeWordService : Service() {
     fun startCommandListening() {
         if (isListeningForCommand) return
         isListeningForCommand = true
-
         mainHandler.post {
             try {
                 createFreshRecognizer()
@@ -163,7 +156,10 @@ class WakeWordService : Service() {
         }
     }
 
-    // Notify overlay to go back to idle — no direct import needed
+    fun setOverlayBinder(b: FloatingOverlay.OverlayBinder?) {
+        // kept for compatibility
+    }
+
     private fun notifyOverlayIdle() {
         onCommandFinished?.invoke()
     }
@@ -177,10 +173,6 @@ class WakeWordService : Service() {
                 "wws_${System.currentTimeMillis()}"
             )
         }
-    }
-
-    fun setOverlayBinder(b: FloatingOverlay.OverlayBinder?) {
-        // kept for compatibility — idle state now via static callback
     }
 
     private fun updateNotification(text: String) {
