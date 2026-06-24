@@ -1,15 +1,18 @@
-// app/src/main/java/com/lat/os/ui/MainActivity.kt
 package com.lat.os.ui
 
+import android.Manifest
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
 import android.widget.*
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import com.lat.os.core.FloatingOverlay
@@ -20,6 +23,18 @@ class MainActivity : AppCompatActivity() {
     private lateinit var masterSwitch: Switch
     private lateinit var statusText: TextView
     private lateinit var prefs: SharedPreferences
+
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val allGranted = permissions.entries.all { it.value }
+        if (!allGranted) {
+            Toast.makeText(this, "Some permissions were denied. The assistant may not work correctly.", Toast.LENGTH_LONG).show()
+            masterSwitch.isChecked = false
+        } else {
+            checkAndEnableAssistant()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -86,14 +101,8 @@ class MainActivity : AppCompatActivity() {
             isChecked = prefs.getBoolean("master_enabled", false)
             setOnCheckedChangeListener { _, isChecked ->
                 if (isChecked) {
-                    // Check overlay permission first
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
-                        !Settings.canDrawOverlays(this@MainActivity)) {
-                        Toast.makeText(this@MainActivity,
-                            "Please grant Overlay permission first!", Toast.LENGTH_LONG).show()
+                    if (!checkAllRequirements()) {
                         masterSwitch.isChecked = false
-                        startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                            Uri.parse("package:$packageName")))
                         return@setOnCheckedChangeListener
                     }
                 }
@@ -186,6 +195,72 @@ class MainActivity : AppCompatActivity() {
         scroll.addView(root)
         setContentView(scroll)
     }
+
+    // ── REQUIREMENTS CHECK ────────────────────────────────────────
+
+    private fun checkAllRequirements(): Boolean {
+        // 1. Overlay permission
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+            !Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "Please grant Overlay permission first!", Toast.LENGTH_LONG).show()
+            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")))
+            return false
+        }
+
+        // 2. Runtime permissions
+        val perms = mutableListOf<String>()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED) {
+            perms.add(Manifest.permission.RECORD_AUDIO)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+            != PackageManager.PERMISSION_GRANTED) {
+            perms.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        if (perms.isNotEmpty()) {
+            permissionLauncher.launch(perms.toTypedArray())
+            return false
+        }
+
+        // 3. Accessibility Service
+        if (!isAccessibilityServiceEnabled()) {
+            Toast.makeText(this, "Please enable LaT OS in Accessibility settings", Toast.LENGTH_LONG).show()
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            return false
+        }
+
+        // 4. Battery optimization (warn but don't block)
+        if (!isIgnoringBatteryOptimizations()) {
+            Toast.makeText(this, "⚠ Please disable battery optimization for LaT OS in Settings", Toast.LENGTH_LONG).show()
+        }
+
+        return true
+    }
+
+    private fun checkAndEnableAssistant() {
+        if (isAccessibilityServiceEnabled() && Settings.canDrawOverlays(this)) {
+            prefs.edit().putBoolean("master_enabled", true).apply()
+            updateServiceState(true)
+            updateUI()
+        }
+    }
+
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        val expected = ComponentName(this, com.lat.os.automation.VoiceAccessibilityService::class.java)
+        val enabledServices = Settings.Secure.getString(contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: return false
+        return enabledServices.contains(expected.flattenToString()) ||
+               enabledServices.contains(expected.flattenToShortString())
+    }
+
+    private fun isIgnoringBatteryOptimizations(): Boolean {
+        val powerManager = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        return powerManager.isIgnoringBatteryOptimizations(packageName)
+    }
+
+    // ── UI UPDATE ────────────────────────────────────────────────
 
     private fun updateUI() {
         val enabled = prefs.getBoolean("master_enabled", false)
