@@ -1,4 +1,3 @@
-// app/src/main/java/com/lat/os/automation/DeviceAutomator.kt
 package com.lat.os.automation
 
 import android.accessibilityservice.AccessibilityService
@@ -6,6 +5,7 @@ import android.accessibilityservice.GestureDescription
 import android.content.Context
 import android.content.Intent
 import android.graphics.Path
+import android.graphics.Rect
 import android.os.Bundle
 import android.view.accessibility.AccessibilityNodeInfo
 
@@ -131,37 +131,50 @@ object DeviceAutomator {
 
         when (action) {
             "answer", "left" -> {
-                // Answer button is usually bottom-left on incoming call screen
                 performTap(service, w * 0.25f, h * 0.80f)
             }
             "decline", "right" -> {
-                // Decline button is usually bottom-right
                 performTap(service, w * 0.75f, h * 0.80f)
             }
         }
     }
 
-    // ── TEXT INTERACTION ─────────────────────────────────────────
-    fun tapOnText(text: String): Boolean {
+    // ── TEXT INTERACTION (IMPROVED) ─────────────────────────────
+    fun tapOnText(text: String, requireClickable: Boolean = true): Boolean {
         val service = serviceInstance ?: return false
         val root = service.rootInActiveWindow ?: return false
         val nodes = root.findAccessibilityNodeInfosByText(text)
-        if (nodes.isNotEmpty()) {
-            nodes[0].performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            return true
+
+        // Prefer clickable nodes, then exact match, then contains
+        val target = nodes.filter { node ->
+            if (requireClickable) node.isClickable else true
+        }.minByOrNull { node ->
+            val nodeText = node.text?.toString() ?: ""
+            if (nodeText.equals(text, ignoreCase = true)) 0 else 1
         }
-        return false
+
+        return target?.performAction(AccessibilityNodeInfo.ACTION_CLICK) ?: false
     }
 
-    fun typeText(text: String) {
-        val service = serviceInstance ?: return
-        val root = service.rootInActiveWindow ?: return
-        val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return
-        val args = Bundle().apply {
-            putCharSequence(
-                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+    fun typeText(targetLabel: String? = null, text: String): Boolean {
+        val service = serviceInstance ?: return false
+        val root = service.rootInActiveWindow ?: return false
+
+        val target = if (targetLabel != null) {
+            service.findNodeByText(targetLabel)
+        } else {
+            root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        } ?: return false
+
+        // First tap to focus if not already focused
+        if (!target.isFocused) {
+            target.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
         }
-        focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+
+        val args = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+        }
+        return target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
     }
 
     // ── PRIVATE HELPERS ──────────────────────────────────────────
