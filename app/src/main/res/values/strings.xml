@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <string name="app_name">LaT OS</string>
+
+    <!-- Accessibility Service Description (required for Play Store / system dialog) -->
+    <string name="accessibility_service_description">
+        LaT OS uses Accessibility to navigate apps via voice commands.
+        It can tap buttons, type text, and take screenshots to understand the screen.
+    </string>
+
+    <!-- Notification Channel -->
+    <string name="channel_name">Voice Service</string>
+    <string name="channel_description">LaT OS wake word listener and floating button</string>
+
+    <!-- TTS / Voice Feedback -->
+    <string name="tts_ready">LaT OS is ready</string>
+    <string name="tts_listening">Listening</string>
+    <string name="tts_processing">Processing</string>
+    <string name="tts_error">Sorry, I didn\'t catch that</string>
+    <string name="tts_done">Done</string>
+    <string name="tts_not_found">Could not find that on screen</string>
+
+    <!-- UI Labels -->
+    <string name="enable_assistant">Enable Assistant</string>
+    <string name="status_active">Assistant active — floating button visible</string>
+    <string name="status_stopped">Assistant stopped</string>
+    <string name="wake_word_hint">Say \"Hey Phone\" to activate</string>
+    <string name="tap_button_hint">Or tap the floating button</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Permissions &amp; Settings</string>
+    <string name="perm_overlay">System Overlay</string>
+    <string name="perm_overlay_desc">Draw floating button over apps</string>
+    <string name="perm_accessibility">Accessibility Service</string>
+    <string name="perm_accessibility_desc">Screen reading and automation</string>
+    <string name="perm_notification">Notification Reader</string>
+    <string name="perm_notification_desc">Read notifications aloud</string>
+    <string name="perm_microphone">Microphone</string>
+    <string name="perm_microphone_desc">Voice commands and wake word</string>
+    <string name="perm_battery">Battery Optimization</string>
+    <string name="perm_battery_desc">Prevent system from killing LaT OS</string>
+
+    <!-- OriginOS Survival -->
+    <string name="originos_survival_title">OriginOS Survival (CRITICAL)</string>
+    <string name="originos_survival_desc">Your phone will kill LaT OS unless you do ALL of these:</string>
+    <string name="originos_step_1">1. Settings → Battery → Background power consumption → Allow LaT OS</string>
+    <string name="originos_step_2">2. Settings → Apps → Permissions → Autostart → Enable LaT OS</string>
+    <string name="originos_step_3">3. Settings → Apps → LaT OS → Battery → Remove background restriction</string>
+    <string name="originos_step_4">4. Recent Apps → Long press LaT OS card → Lock</string>
+    <string name="originos_step_5">5. Settings → Battery → High background power consumption → Allow</string>
+
+    <!-- Gemini API -->
+    <string name="gemini_key_hint">Paste your Gemini API key here</string>
+    <string name="gemini_key_saved">Gemini API Key saved!</string>
+    <string name="gemini_key_empty">Key is empty</string>
+
+    <!-- Test Commands -->
+    <string name="test_command_hint">e.g. open youtube</string>
+    <string name="test_app_hint">e.g. youtube</string>
+    <string name="run_test">Run Test Command</string>
+    <string name="find_app">Find This App</string>
+
+    <!-- Vosk Model Warning -->
+    <string name="vosk_warning">Vosk model required for wake word. Place \'vosk-model-small-en-us-0.15\' in app\'s external files folder.</string>
+
+</resources>
